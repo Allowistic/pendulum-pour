@@ -1,0 +1,115 @@
+<!doctype html>
+<!--
+Pendulum Pour, real-time three.js (WebGL2). Built for Vincent Strader from Adam Chernick's
+Codevember 2026 Day 18 "Pendulum": https://github.com/acher249/codevember-2026/tree/main/18-pendulum
+Original live demo: https://adamwebsite.com/codevember/18-pendulum/
+The pendulum physics (spherical pendulum, Torricelli outflow, falling parcels) and the paint model
+(thin-film flow with yield stress, wet/dry layering, drying) are ported from the original's
+pendulum.ts, paint.ts and canvas.tsx, from WebGPU compute (three/tsl) to WebGL2 fragment passes.
+Added in this build (Nov 2026): a stacked, colour-shifting pour (several colour layers per can that
+run out in turn while the palette drifts round the colour wheel), one to three cans, palettes,
+auto-pour, speed, pause and reset; the canvas saved as a PNG background at phone, desktop, square
+or window size; and a full-screen live background mode. One offline file.
+
+The original code is used under its MIT License:
+
+MIT License
+
+Copyright (c) 2026 Adam Chernick
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Pendulum Pour</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #17171a; color: #eee; font: 14px/1.35 system-ui, -apple-system, Segoe UI, sans-serif; }
+  #app canvas { display: block; touch-action: none; }
+  .panel { position: fixed; top: 12px; right: 12px; width: 280px; max-height: calc(100% - 110px); overflow: auto; background: rgba(20, 20, 24, 0.82); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.09); border-radius: 14px; padding: 12px 14px; box-sizing: border-box; }
+  .panel h1 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
+  .panel .sub { font-size: 12px; opacity: 0.6; margin-bottom: 10px; }
+  .row { margin: 9px 0; }
+  .row label { display: flex; justify-content: space-between; font-size: 12.5px; opacity: 0.85; margin-bottom: 4px; }
+  .row output { opacity: 0.7; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: #ff9b21; height: 22px; }
+  select { width: 100%; background: #26262c; color: #eee; border: 1px solid #3a3a42; border-radius: 8px; padding: 6px 8px; font: inherit; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .check input { width: 18px; height: 18px; accent-color: #ff9b21; }
+  #stack { margin-top: 10px; }
+  .can-stack { display: flex; align-items: center; gap: 4px; margin: 4px 0; font-size: 11.5px; }
+  .can-stack span { width: 42px; opacity: 0.65; }
+  .can-stack i { flex: 1; height: 14px; border-radius: 3px; border: 2px solid transparent; }
+  .can-stack i.now { border-color: #fff; }
+  .bar { position: fixed; left: 12px; bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; max-width: calc(100% - 24px); }
+  button { background: rgba(32, 32, 38, 0.88); color: #f2f2f2; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  button:hover { background: rgba(52, 52, 60, 0.95); }
+  button.primary { background: #ff9b21; color: #1a1206; border-color: #ff9b21; }
+  .sizes { position: fixed; left: 12px; bottom: 64px; display: none; flex-direction: column; gap: 6px; background: rgba(20,20,24,0.92); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 8px; }
+  .sizes.open { display: flex; }
+  .sizes button { text-align: left; }
+  #toggle { position: fixed; top: 12px; right: 300px; padding: 7px 10px; }
+  body.panel-closed .panel { display: none; }
+  body.panel-closed #toggle { right: 12px; }
+  #status { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: rgba(20,20,24,0.9); padding: 8px 14px; border-radius: 10px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  #status.show { opacity: 1; }
+  .credit { position: fixed; right: 12px; bottom: 10px; font-size: 11px; opacity: 0.55; text-align: right; max-width: 360px; }
+  .credit a { color: inherit; }
+  .hint { font-size: 11.5px; opacity: 0.55; margin-top: 8px; }
+  #exitBg { display: none; position: fixed; top: 12px; right: 12px; opacity: 0.15; transition: opacity 0.3s; }
+  #exitBg:hover, #exitBg:focus { opacity: 0.9; }
+  body.bg-mode .panel, body.bg-mode .bar, body.bg-mode .sizes, body.bg-mode #toggle, body.bg-mode .credit { display: none !important; }
+  body.bg-mode #exitBg { display: block; }
+  @media (max-width: 640px) { .panel { width: calc(100% - 24px); max-height: 46%; } #toggle { right: 12px; top: auto; bottom: 64px; } .credit { display: none; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<button id="toggle" title="Show or hide settings">Settings</button>
+<div class="panel">
+  <h1>Pendulum Pour</h1>
+  <div class="sub">Grab a can and throw it, or let it pour on its own.</div>
+  <div class="row"><label>Layers per can <output id="layersOut"></output></label><input id="layers" type="range" min="1" max="8" step="1" /></div>
+  <div class="row"><label>Palette</label><select id="palette"></select></div>
+  <div class="row"><label>Layer length <output id="layerSecondsOut"></output></label><input id="layerSeconds" type="range" min="0.5" max="10" step="0.5" /></div>
+  <div class="row"><label>Colour shift <output id="shiftOut"></output></label><input id="shift" type="range" min="0" max="3" step="0.05" /></div>
+  <div class="row"><label>Cans</label><select id="cans"><option value="1">1 can</option><option value="2">2 cans</option><option value="3">3 cans</option></select></div>
+  <div class="row"><label>Vessel</label><select id="vessel"><option value="can">Can, 1 hole</option><option value="three">Bucket, 3 holes</option><option value="five">Bucket, 5 holes</option><option value="slot">Bucket, slot</option></select></div>
+  <div class="row"><label>Canvas</label><select id="ground"><option value="black">Black</option><option value="white">White</option><option value="linen">Linen</option></select></div>
+  <div class="row"><label>Speed <output id="speedOut"></output></label><input id="speed" type="range" min="0.25" max="3" step="0.25" /></div>
+  <div class="row check"><input id="auto" type="checkbox" /><label for="auto" style="margin:0;opacity:0.9">Auto-pour (re-throws when a can settles)</label></div>
+  <div id="stack"></div>
+  <div class="row"><button id="defaults" style="width:100%;padding:7px">Reset settings</button></div>
+  <div class="hint">Drag a can to pull it back, let go to throw. Drag elsewhere to orbit. Keys: T throw, Space pause, R reset, B live background.</div>
+</div>
+<div class="sizes" id="sizes"></div>
+<div class="bar">
+  <button id="throw" class="primary">Throw</button>
+  <button id="pause">Pause</button>
+  <button id="reset">Reset canvas</button>
+  <button id="save">Save background</button>
+  <button id="live">Live background</button>
+</div>
+<button id="exitBg">Exit background (Esc)</button>
+<div id="status"></div>
+<div class="credit">After <a href="https://github.com/acher249/codevember-2026/tree/main/18-pendulum" target="_blank" rel="noopener">"Pendulum"</a> by Adam Chernick (Codevember 2026, MIT). Stacked colour pour and background export added.</div>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>
